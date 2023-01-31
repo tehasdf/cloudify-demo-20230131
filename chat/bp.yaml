@@ -1,0 +1,99 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - cloudify/types/types.yaml
+  - plugin:cloudify-terraform-plugin
+
+inputs:
+  target:
+    default: /opt/manager/resources/chat_1
+  flags:
+    default: ""
+
+node_templates:
+  source_code:
+    type: cloudify.nodes.Root
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: scripts/copy_source.sh
+          executor: central_deployment_agent
+
+  terraform:
+    type: cloudify.nodes.terraform
+    properties:
+      resource_config:
+        installation_source: https://releases.hashicorp.com/terraform/0.14.3/terraform_0.14.3_linux_amd64.zip
+
+  aws_instance:
+    type: cloudify.nodes.Compute
+    properties:
+      ip: { get_attribute: [ aws_module, resources, build, instances, 0, attributes, public_ip ] }
+      agent_config:
+        install_method: remote
+        user: centos
+        key: { get_secret: agent_key_private }
+    relationships:
+    - type: cloudify.relationships.contained_in
+      target: aws_module
+
+  aws_module:
+    type: cloudify.nodes.terraform.Module
+    properties:
+      resource_config:
+        environment_variables:
+          AWS_ACCESS_KEY_ID: { get_secret: aws_access_key_id }
+          AWS_SECRET_ACCESS_KEY: { get_secret: aws_access_key_secret }
+          AWS_DEFAULT_REGION: { get_secret: aws_region }
+        variables:
+          username: centos
+          ami: ami-0c307a01bbb94ea77
+          aws_region: { get_secret: aws_region }
+          key_name: lukasz-desktop
+          public_key: { get_secret: aws_pubkey }
+        source:
+          location: resources/aws-module.zip
+    relationships:
+      - target: terraform
+        type: cloudify.terraform.relationships.run_on_host
+
+  nim:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create: scripts/install_nim.sh
+    relationships:
+      - target: aws_instance
+        type: cloudify.relationships.contained_in
+      - target: source_code
+        type: cloudify.relationships.depends_on
+
+  chatapp:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create: scripts/build_app.sh
+        start:
+          implementation: scripts/copy_app.sh
+          executor: central_deployment_agent
+          inputs:
+            TARGET: {get_input: target}
+            FLAGS: {get_input: flags}
+    relationships:
+      - target: aws_instance
+        type: cloudify.relationships.contained_in
+      - target: nim
+        type: cloudify.relationships.depends_on
+
+workflows:
+  ci:
+    mapping: scripts/build_workflow.py
+    parameters:
+      target:
+        default: {get_input: target}
+      flags:
+        default: {get_input: flags}
+
+capabilities:
+  target:
+    value: {get_input: target}

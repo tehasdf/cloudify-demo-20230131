@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>chat</title>
+</head>
+<body>
+    <ul id=messages></ul>
+    <form id=sayform action="">
+        <input name=yourname />
+        <input name=yourmessage />
+        <input name=dosubmit type=submit />
+    </form>
+<script>
+    const name = Math.random().toString(36).slice(2, 7);
+    let messages = [];
+    for (let i = 0; i < 10; i++) {
+        messages.push({});
+    }
+
+    function doRender() {
+        let target = document.getElementById('messages');
+        target.innerHTML = '';
+        messages.forEach(msg => {
+            let newElem = document.createElement('li');
+            if (msg.name) {
+                newElem.innerText = `${msg.name}: ${msg.message}`;
+            }
+            target.appendChild(newElem);
+        });
+    }
+
+    window.addEventListener('load', () => {
+        document.forms.sayform.yourname.value = name;
+        doRender();
+        sayform.yourmessage.focus();
+    });
+
+    document.getElementById('sayform').addEventListener('submit', (evt) => {
+        evt.preventDefault();
+        let sayform = document.forms.sayform;
+        sayform.yourname.disabled = true;
+        sayform.yourmessage.disabled = true;
+        sayform.dosubmit.disabled = true;
+        fetch('/say', {
+            method: 'POST',
+            headers: {
+                'Content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: sayform.yourname.value,
+                message: document.forms.sayform.yourmessage.value
+            })
+        }).catch(err => {
+            console.log('error', err);
+        }).then(() => {
+            sayform.yourname.disabled = false;
+            sayform.yourmessage.disabled = false;
+            sayform.dosubmit.disabled = false;
+            sayform.yourmessage.value = '';
+            sayform.yourmessage.focus();
+        })
+    });
+
+    const evtSource = new EventSource('/live');
+    evtSource.addEventListener('say', (evt) => {
+        console.log('evt', evt)
+        messages.shift();
+        messages.push(JSON.parse(evt.data));
+        doRender();
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - cloudify/types/types.yaml
+  - plugin:cloudify-aws-plugin
+
+inputs:
+  infra_name:
+    default: lukasz
+  security_group_id:
+    default: "sg-03b3b6c9ff0a450cb"
+  subnet_id:
+    default: "subnet-b3fa87e9"
+  vpc_id:
+    default: "vpc-39ed2b40"
+  name_filter:
+    default:
+      Name: name
+      Values:
+        - "*"
+  image_owner:
+    default: "*"
+  image_id:
+    default: "ami-0c307a01bbb94ea77"
+  flavor:
+    default: "t2.medium"
+  userdata:
+    default: ""
+  use_net:
+    default: "1"
+  builder_dep:
+    default: builder
+
+dsl_definitions:
+  client_config: &client_config
+    aws_access_key_id: { get_secret: aws_access_key_id }
+    aws_secret_access_key: { get_secret: aws_access_key_secret }
+    region_name: { get_secret: aws_region }
+
+node_templates:
+  nic:
+    type: cloudify.nodes.aws.ec2.Interface
+    properties:
+      client_config: *client_config
+      resource_config:
+        kwargs:
+          Groups:
+            - { get_attribute: [ security_group, aws_resource_id ] }
+      Tags:
+        - Key: Name
+          Value: { concat: [ { get_input: infra_name }, "-", {get_sys: [deployment, id]}, "-", { get_input: use_net } ] }
+    relationships:
+      - type: cloudify.relationships.depends_on
+        target: subnet
+      - type: cloudify.relationships.depends_on
+        target: security_group
+
+  ip:
+    type: cloudify.nodes.aws.ec2.ElasticIP
+    properties:
+      client_config: *client_config
+      Tags:
+        - Key: Name
+          Value: { concat: [ { get_input: infra_name }, "-", {get_sys: [deployment, id]}, "-", { get_input: use_net } ] }
+    relationships:
+      - type: cloudify.relationships.depends_on
+        target: nic
+
+  subnet:
+    type: cloudify.nodes.aws.ec2.Subnet
+    properties:
+      use_external_resource: true
+      resource_id: { get_input: subnet_id }
+      client_config: *client_config
+      resource_config:
+        CidrBlock: 192.168.42.0/24
+        AvailabilityZone: { concat: [ { get_secret: aws_region }, 'b' ]}
+      Tags:
+        - Key: Name
+          Value: { concat: [ { get_input: infra_name }, "-", {get_sys: [deployment, id]}, "-", { get_input: use_net } ] }
+
+  security_group:
+    type: cloudify.nodes.aws.ec2.SecurityGroup
+    properties:
+      use_external_resource: true
+      resource_id: { get_input: security_group_id }
+      client_config: *client_config
+      resource_config:
+        GroupName: { get_input: infra_name }
+        Description: Security group for tests.
+        VpcId: { get_attribute: [ vpc, aws_resource_id] }
+
+  vpc:
+    type: cloudify.nodes.aws.ec2.Vpc
+    properties:
+      use_external_resource: true
+      resource_id: { get_input: vpc_id }
+      resource_config:
+        CidrBlock: 192.168.0.0/16
+      Tags:
+        - Key: Name
+          Value: {concat: [{ get_input: infra_name }, {get_sys: [deployment, id]}]}
+      client_config: *client_config
+
+  image:
+    type: cloudify.nodes.aws.ec2.Image
+    properties:
+      use_external_resource: true
+      resource_config:
+        kwargs:
+          Filters:
+            - { get_input: name_filter }
+            - Name: state
+              Values:
+                - available
+            - Name: owner-id
+              Values:
+                - { get_input: image_owner }
+            - Name: image-id
+              Values:
+                - { get_input: image_id }
+      client_config: *client_config
+
+  test_host:
+    type: cloudify.nodes.aws.ec2.Instances
+    properties:
+      agent_config:
+        install_method: remote
+        user: centos
+        key: { get_secret: agent_key_private }
+      resource_config:
+        ImageId: { get_attribute: [ image, aws_resource_id ] }
+        InstanceType: { get_input: flavor }
+        kwargs:
+          KeyName: lukasz-desktop
+      client_config: *client_config
+      Tags:
+        - Key: Name
+          Value: {concat: [{ get_input: infra_name }, "-test-", {get_sys: [deployment, id]}]}
+    relationships:
+      - type: cloudify.relationships.depends_on
+        target: nic
+      - type: cloudify.relationships.depends_on
+        target: ip
+      - type: cloudify.relationships.depends_on
+        target: image
+
+  service_binary:
+    type: cloudify.nodes.Root
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: scripts/copy_binary.sh
+          executor: central_deployment_agent
+          inputs:
+            BINARY: {get_attribute: [builder, capabilities, target]}
+    relationships:
+      - target: builder
+        type: cloudify.relationships.depends_on
+
+  service:
+    type: cloudify.nodes.Root
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create: scripts/create_service.sh
+        start: scripts/start_service.sh
+        stop: scripts/stop_service.sh
+        delete: scripts/delete_service.sh
+    relationships:
+      - target: test_host
+        type: cloudify.relationships.contained_in
+      - target: service_binary
+        type: cloudify.relationships.depends_on
+
+  builder:
+    type: cloudify.nodes.SharedResource
+    properties:
+      resource_config:
+        deployment:
+          id: {get_input: builder_dep}
+
+
+capabilities:
+  address:
+    value: {get_attribute: [test_host, public_ip_address]}

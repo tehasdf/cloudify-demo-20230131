@@ -1,0 +1,43 @@
+plugins:
+
+  mini_plugin:
+    executor: central_deployment_agent
+    package_name: mini-plugin
+    package_version: '0.1.0'
+
+node_types:
+  mini.manifest:
+    derived_from: cloudify.nodes.Root
+    properties:
+      host:
+        type: string
+      token:
+        type: string
+      path:
+        type: string
+      target:
+        type: string
+      namespace:
+        type: string
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: mini_plugin.mini_plugin.tasks.deploy
+          inputs:
+            token:
+              default: {get_property: [SELF, token]}
+            host:
+              default: {get_property: [SELF, host]}
+            path:
+              default: {get_property: [SELF, path]}
+            target:
+              default: {get_property: [SELF, target]}
+            namespace:
+              default: {get_property: [SELF, namespace]}
+        delete:
+          implementation: mini_plugin.mini_plugin.tasks.destroy
+          inputs:
+            token:
+              default: {get_property: [SELF, token]}
+            host:
+              default: {get_property: [SELF, host]}

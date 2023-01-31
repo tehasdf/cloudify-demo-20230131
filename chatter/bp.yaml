@@ -1,0 +1,21 @@
+tosca_definitions_version: cloudify_dsl_1_5
+imports:
+  - cloudify/types/types.yaml
+
+deployment_settings:
+  default_schedules:
+    s1:
+      workflow: execute_operation
+      workflow_parameters:
+        operation: foo.bar
+      recurrence: '1min'
+      since: '+1min'
+
+node_templates:
+  chatter:
+    type: cloudify.nodes.Root
+    interfaces:
+      foo:
+        bar:
+          implementation: scripts/say.sh
+          executor: central_deployment_agent
